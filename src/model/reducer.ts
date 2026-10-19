@@ -1,4 +1,5 @@
 import { blankPerson } from './graph';
+import { buildEdge, checkConnection, type ConnectKind } from './connections';
 import { LIMITS, type FileItem, type ID, type Person, type Source, type Tree } from './types';
 import type { PlanResult } from '../relations/relations';
 
@@ -15,12 +16,17 @@ export type Action =
   | { type: 'setMe'; id: ID | null }
   | { type: 'deletePerson'; id: ID }
   | { type: 'removeEdge'; id: ID }
+  | { type: 'connect'; id: ID; kind: ConnectKind; personId: ID; otherId: ID; label?: string }
+  | { type: 'setEdgeLabel'; id: ID; label: string }
+  | { type: 'movePerson'; id: ID; dx: number; dy: number }
+  | { type: 'resetLayout' }
   | { type: 'addSource'; source: Source }
   | { type: 'updateSource'; id: ID; patch: Partial<Pick<Source, 'title' | 'excerpt' | 'personIds'>> }
   | { type: 'removeSource'; id: ID };
 
 const touch = (tree: Tree): Tree => ({ ...tree, updatedAt: new Date().toISOString() });
 const clamp = (value: string, max: number) => value.slice(0, max);
+const OFFSET_MAX = 20000;
 
 const FIELD_LIMITS: Record<keyof EditablePersonFields, number> = {
   name: LIMITS.name,
@@ -97,8 +103,46 @@ export function treeReducer(tree: Tree, action: Action): Tree {
     }
 
     case 'removeEdge':
-      // only free-form "other" links can be removed on their own; family structure changes via delete
-      return touch({ ...tree, edges: tree.edges.filter((e) => !(e.id === action.id && e.type === 'other')) });
+      if (!tree.edges.some((e) => e.id === action.id)) return tree;
+      return touch({ ...tree, edges: tree.edges.filter((e) => e.id !== action.id) });
+
+    case 'connect': {
+      if (tree.edges.length >= LIMITS.maxPeople * 6 || tree.edges.some((e) => e.id === action.id)) return tree;
+      if (checkConnection(tree, action.kind, action.personId, action.otherId, action.label)) return tree;
+      const edge = buildEdge(action.kind, action.personId, action.otherId, action.label, action.id);
+      return touch({ ...tree, edges: [...tree.edges, edge] });
+    }
+
+    case 'setEdgeLabel':
+      return touch({
+        ...tree,
+        edges: tree.edges.map((e) => (e.id === action.id && e.type === 'other' ? { ...e, label: clamp(action.label, 60) } : e)),
+      });
+
+    case 'movePerson': {
+      const person = tree.people[action.id];
+      if (!person || !Number.isFinite(action.dx) || !Number.isFinite(action.dy)) return tree;
+      const dx = Math.max(-OFFSET_MAX, Math.min(OFFSET_MAX, Math.round(action.dx)));
+      const dy = Math.max(-OFFSET_MAX, Math.min(OFFSET_MAX, Math.round(action.dy)));
+      if ((person.dx ?? 0) === dx && (person.dy ?? 0) === dy) return tree;
+      const { dx: _dx, dy: _dy, ...rest } = person;
+      void _dx;
+      void _dy;
+      const next: Person = dx || dy ? { ...rest, dx, dy } : rest;
+      return touch({ ...tree, people: { ...tree.people, [person.id]: next } });
+    }
+
+    case 'resetLayout': {
+      if (!Object.values(tree.people).some((p) => p.dx || p.dy)) return tree;
+      const people: Record<ID, Person> = {};
+      for (const [id, p] of Object.entries(tree.people)) {
+        const { dx: _dx, dy: _dy, ...rest } = p;
+        void _dx;
+        void _dy;
+        people[id] = rest;
+      }
+      return touch({ ...tree, people });
+    }
 
     case 'addSource':
       if (tree.sources.length >= 5000) return tree;
@@ -143,6 +187,8 @@ export const initHistory = (tree: Tree): History => ({ present: tree, past: [], 
 function coalesceKey(action: Action): string | null {
   if (action.type === 'updatePerson') return `person:${action.id}:${Object.keys(action.patch).join(',')}`;
   if (action.type === 'updateSource') return `source:${action.id}:${Object.keys(action.patch).join(',')}`;
+  if (action.type === 'movePerson') return `move:${action.id}`;
+  if (action.type === 'setEdgeLabel') return `edge:${action.id}`;
   return null;
 }
 

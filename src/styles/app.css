@@ -1247,3 +1247,44 @@ code {
     animation: none;
   }
 }
+
+/* dragging people */
+.node {
+  cursor: grab;
+}
+.canvas.is-dragging,
+.canvas.is-dragging .node {
+  cursor: grabbing;
+}
+.node.is-dragging .node-card {
+  stroke: var(--orange);
+  stroke-width: 4;
+}
+.node.is-dragging {
+  filter: drop-shadow(0 6px 6px rgba(26, 46, 31, 0.28));
+}
+.node-add {
+  cursor: pointer;
+}
+
+.chip-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+.connect-form {
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 2px dashed var(--green-mid);
+}
+.connect-form h4 {
+  margin: 0;
+  font-family: var(--font-body);
+  font-size: 17px;
+  color: var(--green-dark);
+}
+.connect-form .btn {
+  justify-self: start;
+}

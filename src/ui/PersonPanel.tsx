@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type ChangeEvent, type FormEvent 
 import { downloadDocument, storeUpload } from '../app/files';
 import { useStore } from '../app/store';
 import { componentsWithout, findComponents } from '../layout/layout';
+import { CONNECT_OPTIONS, checkConnection, type ConnectKind } from '../model/connections';
 import { childrenOf, displayName, othersOf, parentsOf, partnersOf, siblingsOf } from '../model/graph';
 import { newId } from '../model/ids';
 import type { Edge, ID, Person } from '../model/types';
@@ -29,6 +30,10 @@ export function PersonPanel({ person, focusNameSignal, onClose, onSelect, onAddR
   const [linkUrl, setLinkUrl] = useState('');
   const [linkTitle, setLinkTitle] = useState('');
   const [linkError, setLinkError] = useState<string | null>(null);
+  const [connectKind, setConnectKind] = useState<ConnectKind>('parent');
+  const [connectTo, setConnectTo] = useState<ID | ''>('');
+  const [connectLabel, setConnectLabel] = useState('');
+  const [connectError, setConnectError] = useState<string | null>(null);
   const isMe = tree.meId === person.id;
 
   useEffect(() => {
@@ -43,6 +48,9 @@ export function PersonPanel({ person, focusNameSignal, onClose, onSelect, onAddR
     setLinkUrl('');
     setLinkTitle('');
     setLinkError(null);
+    setConnectTo('');
+    setConnectLabel('');
+    setConnectError(null);
   }, [person.id]);
 
   const edit = (patch: Partial<Pick<Person, 'name' | 'nickname' | 'born' | 'died' | 'place' | 'notes'>>) =>
@@ -111,16 +119,58 @@ export function PersonPanel({ person, focusNameSignal, onClose, onSelect, onAddR
     return { split: Math.max(0, after - before), connections };
   }, [tree.people, tree.edges, person.id]);
 
-  const relRow = (title: string, ids: ID[]) =>
+  const everyoneElse = useMemo(
+    () => Object.values(tree.people).filter((p) => p.id !== person.id).sort((a, b) => displayName(a).localeCompare(displayName(b))),
+    [tree.people, person.id],
+  );
+
+  const connect = (e: FormEvent) => {
+    e.preventDefault();
+    if (!connectTo) return setConnectError('Choose who to connect.');
+    const g = { people: tree.people, edges: tree.edges };
+    const problem = checkConnection(g, connectKind, person.id, connectTo, connectLabel);
+    if (problem) return setConnectError(problem);
+    dispatch({ type: 'connect', id: newId('e'), kind: connectKind, personId: person.id, otherId: connectTo, label: connectLabel });
+    onToast(`Connected to ${displayName(tree.people[connectTo])}.`);
+    setConnectTo('');
+    setConnectLabel('');
+    setConnectError(null);
+  };
+
+  /** The saved connection (if any) that makes `otherId` a parent / child / partner of this person. */
+  const edgeFor = (type: 'parent-of-me' | 'child-of-me' | 'partner', otherId: ID): string | undefined =>
+    tree.edges.find((e) => {
+      if (type === 'parent-of-me') return e.type === 'parent' && e.from === otherId && e.to === person.id;
+      if (type === 'child-of-me') return e.type === 'parent' && e.from === person.id && e.to === otherId;
+      return e.type === 'partner' && ((e.from === person.id && e.to === otherId) || (e.from === otherId && e.to === person.id));
+    })?.id;
+
+  const relRow = (title: string, ids: ID[], removeVia?: (id: ID) => string | undefined) =>
     ids.length > 0 && (
       <div className="rel-row">
         <span className="rel-title">{title}</span>
         <span className="rel-people">
-          {ids.map((id) => (
-            <button key={id} type="button" className="chip chip-small" onClick={() => onSelect(id)}>
-              {displayName(tree.people[id])}
-            </button>
-          ))}
+          {ids.map((id) => {
+            const edgeId = removeVia?.(id);
+            return (
+              <span key={id} className="chip-group">
+                <button type="button" className="chip chip-small" onClick={() => onSelect(id)}>
+                  {displayName(tree.people[id])}
+                </button>
+                {edgeId && (
+                  <button
+                    type="button"
+                    className="icon-btn icon-btn-small"
+                    aria-label={`Remove the connection to ${displayName(tree.people[id])}`}
+                    title="Remove this connection"
+                    onClick={() => dispatch({ type: 'removeEdge', id: edgeId })}
+                  >
+                    <Icon name="close" size={16} />
+                  </button>
+                )}
+              </span>
+            );
+          })}
         </span>
       </div>
     );
@@ -286,10 +336,10 @@ export function PersonPanel({ person, focusNameSignal, onClose, onSelect, onAddR
           {relations.parents.length + relations.partners.length + relations.children.length + relations.siblings.length + relations.others.length === 0 && (
             <p className="hint">Not connected to anyone yet. Hover over their card for three seconds (or press “Add relative”).</p>
           )}
-          {relRow('Parents', relations.parents)}
-          {relRow('Partners', relations.partners)}
+          {relRow('Parents', relations.parents, (id) => edgeFor('parent-of-me', id))}
+          {relRow('Partners', relations.partners, (id) => edgeFor('partner', id))}
           {relRow('Siblings', relations.siblings)}
-          {relRow('Children', relations.children)}
+          {relRow('Children', relations.children, (id) => edgeFor('child-of-me', id))}
           {relations.others.map(({ edge, other }) => (
             <div className="rel-row" key={edge.id}>
               <span className="rel-title">{edge.label || 'Connection'}</span>
@@ -303,6 +353,45 @@ export function PersonPanel({ person, focusNameSignal, onClose, onSelect, onAddR
               </span>
             </div>
           ))}
+          <form className="connect-form" onSubmit={connect}>
+            <h4>Connect to someone already in the tree</h4>
+            <label className="label">
+              Who
+              <select className="field" value={connectTo} onChange={(e) => { setConnectTo(e.target.value); setConnectError(null); }} disabled={everyoneElse.length === 0}>
+                <option value="">{everyoneElse.length ? 'Choose a person…' : 'No one else yet'}</option>
+                {everyoneElse.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {displayName(p)}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="label">
+              They…
+              <select className="field" value={connectKind} onChange={(e) => { setConnectKind(e.target.value as ConnectKind); setConnectError(null); }}>
+                {CONNECT_OPTIONS.map((o) => (
+                  <option key={o.kind} value={o.kind}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {connectKind === 'other' && (
+              <label className="label">
+                What kind of connection?
+                <input className="field" value={connectLabel} maxLength={60} onChange={(e) => setConnectLabel(e.target.value)} placeholder="e.g. Godmother, family friend…" />
+              </label>
+            )}
+            {connectError && (
+              <p className="error" role="alert">
+                {connectError}
+              </p>
+            )}
+            <button type="submit" className="btn btn-small" disabled={everyoneElse.length === 0}>
+              <Icon name="link" size={16} /> Connect
+            </button>
+            <p className="hint">Siblings come from sharing a parent. To change who someone’s siblings are, change their parents. Removing a connection can split the tree into separate trees; Undo brings it back.</p>
+          </form>
         </section>
 
         <section className="section danger">

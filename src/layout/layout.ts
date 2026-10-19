@@ -45,12 +45,20 @@ export interface Bounds {
   maxY: number;
 }
 
+/** Who is linked to whom, kept so the lines can be redrawn when people are dragged. */
+export interface LinkInfo {
+  partners: { id: string; a: ID; b: ID; adjacent: boolean }[];
+  others: { id: string; a: ID; b: ID; label: string }[];
+  families: { key: string; parents: ID[]; kids: ID[]; heart: boolean }[];
+}
+
 export interface TreeLayout {
   rootId: ID;
   ids: ID[];
   nodes: Record<ID, PlacedNode>;
   connectors: Connector[];
   bounds: Bounds;
+  info: LinkInfo;
 }
 
 /** Connected components over all edge types: every unconnected cluster is its own tree. */
@@ -499,121 +507,201 @@ export function layoutTree(g: Graph, ids: ID[], rootId: ID, sizes: SizeMap = {})
   }
 
   // ---- 6. connectors ---------------------------------------------------------------------------------
-  const connectors: Connector[] = [];
   const adjacentInRow = (a: ID, b: ID): boolean => {
     const ua = unitOf.get(a)!;
     if (ua !== unitOf.get(b)) return false;
     return Math.abs(ua.members.indexOf(a) - ua.members.indexOf(b)) === 1;
   };
-  /** The point halfway across the gap between two neighbouring cards (where the heart sits). */
-  const gapCentre = (a: PlacedNode, b: PlacedNode) => {
-    const [l, r] = a.x <= b.x ? [a, b] : [b, a];
-    return (l.x + l.w / 2 + r.x - r.w / 2) / 2;
-  };
 
+  const info: LinkInfo = { partners: [], others: [], families: [] };
   for (const e of edges) {
-    if (e.type === 'parent') continue;
-    const a = nodes[e.from]!;
-    const b = nodes[e.to]!;
-    const [left, right] = a.x <= b.x ? [a, b] : [b, a];
-    if (e.type === 'partner') {
-      if (adjacentInRow(a.id, b.id)) {
-        connectors.push({
-          id: e.id,
-          kind: 'partner',
-          d: `M ${left.x + left.w / 2} ${left.y} L ${right.x - right.w / 2} ${right.y}`,
-          labelX: gapCentre(a, b),
-          labelY: (left.y + right.y) / 2,
-        });
-      } else {
-        const y = Math.max(a.y + a.h / 2, b.y + b.h / 2);
-        connectors.push({
-          id: e.id,
-          kind: 'partner',
-          d: `M ${a.x} ${a.y + a.h / 2} Q ${(a.x + b.x) / 2} ${y + 46} ${b.x} ${b.y + b.h / 2}`,
-        });
-      }
-    } else {
-      const top = Math.min(a.y - a.h / 2, b.y - b.h / 2);
-      const mx = (a.x + b.x) / 2;
-      connectors.push({
-        id: e.id,
-        kind: 'other',
-        d: `M ${a.x} ${a.y - a.h / 2} Q ${mx} ${top - 56} ${b.x} ${b.y - b.h / 2}`,
-        label: e.label,
-        labelX: mx,
-        labelY: top - 30,
-      });
-    }
+    if (e.type === 'partner') info.partners.push({ id: e.id, a: e.from, b: e.to, adjacent: adjacentInRow(e.from, e.to) });
+    else if (e.type === 'other') info.others.push({ id: e.id, a: e.from, b: e.to, label: e.label });
   }
-
-  interface Family {
-    key: string;
-    parents: ID[];
-    kids: ID[];
-  }
-  const families = new Map<string, Family>();
+  const families = new Map<string, { key: string; parents: ID[]; kids: ID[]; heart: boolean }>();
   for (const id of ids) {
     const ps = effParents.get(id);
     if (!ps?.length) continue;
     const key = [...ps].sort().join('|');
     const fam = families.get(key);
     if (fam) fam.kids.push(id);
-    else families.set(key, { key, parents: [...ps].sort(), kids: [id] });
+    else {
+      const sorted = [...ps].sort();
+      families.set(key, {
+        key,
+        parents: sorted,
+        kids: [id],
+        heart: sorted.length === 2 && gen.get(sorted[0]!) === gen.get(sorted[1]!) && adjacentInRow(sorted[0]!, sorted[1]!),
+      });
+    }
+  }
+  info.families = [...families.values()];
+
+  const layout: TreeLayout = {
+    rootId,
+    ids,
+    nodes,
+    connectors: [],
+    bounds: { minX: 0, minY: 0, maxX: 0, maxY: 0 },
+    info,
+  };
+  layout.connectors = buildConnectors(info, nodes);
+  layout.bounds = boundsOf(nodes);
+  return layout;
+}
+
+export function boundsOf(nodes: Record<ID, PlacedNode>): Bounds {
+  const all = Object.values(nodes);
+  return {
+    minX: Math.min(...all.map((n) => n.x - n.w / 2)),
+    maxX: Math.max(...all.map((n) => n.x + n.w / 2)),
+    minY: Math.min(...all.map((n) => n.y - n.h / 2)),
+    maxY: Math.max(...all.map((n) => n.y + n.h / 2)),
+  };
+}
+
+type Box = { x: number; y: number; w: number; h: number };
+
+/** Where a straight line between two cards leaves the first card (and, from the other side, enters the second). */
+function borderPoint(from: Box, to: Box): { x: number; y: number } {
+  const dx = to.x - from.x;
+  const dy = to.y - from.y;
+  if (dx === 0 && dy === 0) return { x: from.x, y: from.y };
+  const t = Math.min(dx === 0 ? Infinity : from.w / 2 / Math.abs(dx), dy === 0 ? Infinity : from.h / 2 / Math.abs(dy));
+  return { x: from.x + dx * t, y: from.y + dy * t };
+}
+
+/** The line between two partners and the point (the heart) halfway along it. */
+function partnerSegment(a: Box, b: Box): { x1: number; y1: number; x2: number; y2: number; hx: number; hy: number } {
+  const [l, r] = a.x <= b.x ? [a, b] : [b, a];
+  const sideBySide = r.x - r.w / 2 - (l.x + l.w / 2) >= 8 && Math.abs(l.y - r.y) <= Math.max(l.h, r.h) / 2;
+  const p1 = sideBySide ? { x: l.x + l.w / 2, y: l.y } : borderPoint(l, r);
+  const p2 = sideBySide ? { x: r.x - r.w / 2, y: r.y } : borderPoint(r, l);
+  return { x1: p1.x, y1: p1.y, x2: p2.x, y2: p2.y, hx: (p1.x + p2.x) / 2, hy: (p1.y + p2.y) / 2 };
+}
+
+/**
+ * Turn "who is linked to whom" plus the current card positions into drawable lines. Cheap enough to run on
+ * every pointer move, which is how lines follow a card while it is being dragged.
+ */
+export function buildConnectors(info: LinkInfo, nodes: Record<ID, PlacedNode>): Connector[] {
+  const connectors: Connector[] = [];
+  const hearts = new Map<string, { x: number; y: number }>();
+  const pairKey = (a: ID, b: ID) => (a < b ? `${a}|${b}` : `${b}|${a}`);
+
+  for (const p of info.partners) {
+    const a = nodes[p.a];
+    const b = nodes[p.b];
+    if (!a || !b) continue;
+    const sameRow = Math.abs(a.y - b.y) <= Math.max(a.h, b.h) / 2;
+    if (!p.adjacent && sameRow) {
+      const y = Math.max(a.y + a.h / 2, b.y + b.h / 2);
+      connectors.push({
+        id: p.id,
+        kind: 'partner',
+        d: `M ${a.x} ${a.y + a.h / 2} Q ${(a.x + b.x) / 2} ${y + 46} ${b.x} ${b.y + b.h / 2}`,
+      });
+      continue;
+    }
+    const seg = partnerSegment(a, b);
+    hearts.set(pairKey(p.a, p.b), { x: seg.hx, y: seg.hy });
+    connectors.push({ id: p.id, kind: 'partner', d: `M ${seg.x1} ${seg.y1} L ${seg.x2} ${seg.y2}`, labelX: seg.hx, labelY: seg.hy });
+  }
+
+  for (const o of info.others) {
+    const a = nodes[o.a];
+    const b = nodes[o.b];
+    if (!a || !b) continue;
+    const top = Math.min(a.y - a.h / 2, b.y - b.h / 2);
+    const mx = (a.x + b.x) / 2;
+    connectors.push({
+      id: o.id,
+      kind: 'other',
+      d: `M ${a.x} ${a.y - a.h / 2} Q ${mx} ${top - 56} ${b.x} ${b.y - b.h / 2}`,
+      label: o.label,
+      labelX: mx,
+      labelY: top - 30,
+    });
   }
 
   interface Drawn {
-    fam: Family;
+    key: string;
+    kids: ID[];
     starts: { x: number; y: number }[];
     left: number;
     right: number;
     parentGen: number;
+    parentBottom: number;
   }
   const drawn: Drawn[] = [];
-  for (const fam of families.values()) {
-    const ps = fam.parents.map((id) => nodes[id]!);
-    const kids = fam.kids.map((id) => nodes[id]!);
+  for (const fam of info.families) {
+    const ps = fam.parents.map((id) => nodes[id]).filter((n): n is PlacedNode => !!n);
+    const kids = fam.kids.map((id) => nodes[id]).filter((n): n is PlacedNode => !!n);
+    if (!ps.length || !kids.length) continue;
     const starts: { x: number; y: number }[] = [];
-    const [pa, pb] = fam.parents;
-    if (fam.parents.length === 2 && ps[0]!.gen === ps[1]!.gen && adjacentInRow(pa!, pb!)) {
-      starts.push({ x: gapCentre(ps[0]!, ps[1]!), y: ps[0]!.y });
-    } else {
-      for (const p of ps) starts.push({ x: p.x, y: p.y + p.h / 2 });
+    let heart = fam.heart && ps.length === 2 ? hearts.get(pairKey(fam.parents[0]!, fam.parents[1]!)) : undefined;
+    if (fam.heart && ps.length === 2 && !heart) {
+      const seg = partnerSegment(ps[0]!, ps[1]!);
+      heart = { x: seg.hx, y: seg.hy };
     }
+    if (heart) starts.push(heart);
+    else for (const p of ps) starts.push({ x: p.x, y: p.y + p.h / 2 });
     const xs = [...starts.map((s) => s.x), ...kids.map((k) => k.x)];
-    drawn.push({ fam, starts, left: Math.min(...xs), right: Math.max(...xs), parentGen: Math.max(...ps.map((p) => p.gen)) });
+    drawn.push({
+      key: fam.key,
+      kids: fam.kids,
+      starts,
+      left: Math.min(...xs),
+      right: Math.max(...xs),
+      parentGen: Math.max(...ps.map((p) => p.gen)),
+      parentBottom: Math.max(...ps.map((p) => p.y + p.h / 2)),
+    });
   }
 
   // give overlapping horizontal bars of the same row different heights so they never merge
   const byGen = new Map<number, Drawn[]>();
   for (const d of drawn) (byGen.get(d.parentGen) ?? byGen.set(d.parentGen, []).get(d.parentGen)!).push(d);
-  for (const [g0, list] of byGen) {
+  for (const list of byGen.values()) {
     list.sort((a, b) => a.left - b.left || a.right - b.right);
     const levelEnds: number[] = [];
     for (const d of list) {
       let level = levelEnds.findIndex((end) => end < d.left - 6);
       if (level === -1) level = levelEnds.length;
       levelEnds[level] = d.right;
-      const busY = (rowY.get(g0) ?? 0) + (rowH.get(g0) ?? NODE_H) / 2 + BUS_START + (level % BUS_LEVELS) * BUS_STEP;
+      let busY = d.parentBottom + BUS_START + (level % BUS_LEVELS) * BUS_STEP;
+      const kidTop = Math.min(...d.kids.map((k) => nodes[k]!.y - nodes[k]!.h / 2));
+      if (kidTop - busY < 24) busY = (d.parentBottom + kidTop) / 2;
       const parts: string[] = [];
       for (const s of d.starts) parts.push(`M ${s.x} ${s.y} V ${busY}`);
       parts.push(`M ${d.left} ${busY} H ${d.right}`);
-      for (const k of d.fam.kids) {
+      for (const k of d.kids) {
         const n = nodes[k]!;
         parts.push(`M ${n.x} ${busY} V ${n.y - n.h / 2}`);
       }
-      connectors.push({ id: `fam_${d.fam.key}`, kind: 'parent', d: parts.join(' ') });
+      connectors.push({ id: `fam_${d.key}`, kind: 'parent', d: parts.join(' ') });
     }
   }
+  return connectors;
+}
 
-  const all = Object.values(nodes);
-  const bounds: Bounds = {
-    minX: Math.min(...all.map((n) => n.x - n.w / 2)),
-    maxX: Math.max(...all.map((n) => n.x + n.w / 2)),
-    minY: Math.min(...all.map((n) => n.y - n.h / 2)),
-    maxY: Math.max(...all.map((n) => n.y + n.h / 2)),
-  };
-  return { rootId, ids, nodes, connectors, bounds };
+export interface Offset {
+  dx: number;
+  dy: number;
+}
+
+/** The layout with people nudged by hand-dragged offsets; the connecting lines are redrawn to match. */
+export function withOffsets(layout: TreeLayout, offsets: Record<ID, Offset | undefined>): TreeLayout {
+  let moved = false;
+  const nodes: Record<ID, PlacedNode> = {};
+  for (const [id, n] of Object.entries(layout.nodes)) {
+    const o = offsets[id];
+    if (o && (o.dx || o.dy)) {
+      moved = true;
+      nodes[id] = { ...n, x: n.x + o.dx, y: n.y + o.dy };
+    } else nodes[id] = n;
+  }
+  if (!moved) return layout;
+  return { ...layout, nodes, connectors: buildConnectors(layout.info, nodes), bounds: boundsOf(nodes) };
 }
 
 /**

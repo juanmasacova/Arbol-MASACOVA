@@ -94,6 +94,7 @@ export default function App() {
   const visibleLayouts = viewAll ? layouts : layouts.slice(focusIndex, focusIndex + 1);
   const visibleNames = viewAll ? treeNames : treeNames.slice(focusIndex, focusIndex + 1);
 
+  const anyMoved = useMemo(() => Object.values(tree.people).some((p) => p.dx || p.dy), [tree.people]);
   const selected = selectedId ? tree.people[selectedId] : undefined;
   const menuPerson = menu ? tree.people[menu.personId] : undefined;
 
@@ -226,6 +227,7 @@ export default function App() {
               centerReq={centerReq}
               onSelect={select}
               onOpenMenu={openMenu}
+              onMove={(id, dx, dy) => dispatch({ type: 'movePerson', id, dx, dy })}
             />
 
             {layouts.length > 1 && (
@@ -286,6 +288,16 @@ export default function App() {
                   <Icon name="me" />
                 </button>
               )}
+              <button
+                type="button"
+                className="icon-btn"
+                onClick={() => dispatch({ type: 'resetLayout' })}
+                disabled={!anyMoved}
+                aria-label="Tidy up: put everyone back in their automatic place"
+                title="Tidy up: undo all dragging"
+              >
+                <Icon name="tidy" />
+              </button>
               <button type="button" className="icon-btn" onClick={startTree} aria-label="Start another tree" title="Start another, separate tree">
                 <Icon name="plus" />
               </button>

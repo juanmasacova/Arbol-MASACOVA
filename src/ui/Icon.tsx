@@ -19,6 +19,7 @@ const PATHS = {
   search: 'M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14zM21 21l-5-5',
   check: 'M5 13l4 4L19 7',
   alert: 'M12 4l9 16H3zM12 10v4M12 17.5v.5',
+  tidy: 'M5 5h5v5H5zM14 5h5v5h-5zM9.5 14h5v5h-5z',
   external: 'M14 4h6v6M20 4l-9 9M18 14v6H4V6h6',
 } as const;
 

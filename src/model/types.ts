@@ -20,6 +20,9 @@ export interface Person {
   photoId: ID | null;
   placeholder: boolean; // auto-created stand-in ("Unknown") until the user edits it
   files: FileItem[];
+  /** Hand-dragged shift from where the automatic layout puts this person (pixels). Absent = not moved. */
+  dx?: number;
+  dy?: number;
 }
 
 /** parent: from = parent, to = child. partner / other are symmetric. */

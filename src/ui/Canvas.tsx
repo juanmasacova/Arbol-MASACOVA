@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent } from 'react';
 import { datesOf } from '../model/graph';
 import type { Person, ID } from '../model/types';
-import type { TreeLayout } from '../layout/layout';
+import { withOffsets, type Offset, type TreeLayout } from '../layout/layout';
 import { hashString, sketchify } from '../layout/sketch';
 import { PersonNode } from './PersonNode';
 
@@ -36,6 +36,7 @@ interface Props {
   centerReq: CenterRequest;
   onSelect: (id: ID | null) => void;
   onOpenMenu: (id: ID, anchor: Anchor) => void;
+  onMove: (id: ID, dx: number, dy: number) => void;
 }
 
 export const HOVER_MS = 3000;
@@ -47,10 +48,15 @@ const MAX_K = 2.5;
 const clampK = (k: number) => Math.min(MAX_K, Math.max(MIN_K, k));
 const prefersReducedMotion = () => window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
 
-export function Canvas({ layouts, showAll, treeLabels, people, meId, selectedId, menuOpen, insetRight, insetBottom, centerReq, onSelect, onOpenMenu }: Props) {
+export function Canvas({ layouts, showAll, treeLabels, people, meId, selectedId, menuOpen, insetRight, insetBottom, centerReq, onSelect, onOpenMenu, onMove }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [view, setView] = useState<View>({ x: 0, y: 0, k: 1 });
   const viewRef = useRef(view);
+  const [live, setLive] = useState<{ id: ID; dx: number; dy: number } | null>(null);
+  const liveRef = useRef(live);
+  liveRef.current = live;
+  const peopleRef = useRef(people);
+  peopleRef.current = people;
   const [hoverId, setHoverId] = useState<ID | null>(null);
   const hoverIdRef = useRef<ID | null>(null);
   const hoverTimer = useRef(0);
@@ -65,6 +71,9 @@ export function Canvas({ layouts, showAll, treeLabels, people, meId, selectedId,
     originY: 0,
     moved: false,
     longPressed: false,
+    dragging: false,
+    baseDx: 0,
+    baseDy: 0,
     nodeId: null as ID | null,
     addId: null as ID | null,
     pinchDist: 0,
@@ -78,16 +87,24 @@ export function Canvas({ layouts, showAll, treeLabels, people, meId, selectedId,
     setView(v);
   }, []);
 
+  // hand-dragged offsets (saved with each person) plus the card being dragged right now
+  const shown = useMemo(() => {
+    const offsets: Record<ID, Offset> = {};
+    for (const p of Object.values(people)) if (p.dx || p.dy) offsets[p.id] = { dx: p.dx ?? 0, dy: p.dy ?? 0 };
+    if (live) offsets[live.id] = { dx: live.dx, dy: live.dy };
+    return layouts.map((layout) => withOffsets(layout, offsets));
+  }, [layouts, people, live]);
+
   const placements = useMemo(() => {
     let cursor = 0;
-    return layouts.map((layout) => {
+    return shown.map((layout) => {
       if (!showAll) return { layout, ox: 0, oy: 0 };
       const width = layout.bounds.maxX - layout.bounds.minX;
       const placement = { layout, ox: cursor - layout.bounds.minX, oy: -layout.bounds.minY };
       cursor += width + 240;
       return placement;
     });
-  }, [layouts, showAll]);
+  }, [shown, showAll]);
 
   const worldOf = useMemo(() => {
     const map = new Map<ID, Anchor>();
@@ -260,8 +277,11 @@ export function Canvas({ layouts, showAll, treeLabels, people, meId, selectedId,
     g.originY = viewRef.current.y;
     g.moved = false;
     g.longPressed = false;
+    g.dragging = false;
     g.nodeId = target.closest('[data-node]')?.getAttribute('data-node') ?? null;
     g.addId = target.closest('[data-add]')?.getAttribute('data-add') ?? null;
+    g.baseDx = (g.nodeId && peopleRef.current[g.nodeId]?.dx) || 0;
+    g.baseDy = (g.nodeId && peopleRef.current[g.nodeId]?.dy) || 0;
     try {
       containerRef.current?.setPointerCapture(e.pointerId);
     } catch {
@@ -315,6 +335,16 @@ export function Canvas({ layouts, showAll, treeLabels, people, meId, selectedId,
     if (!g.moved && Math.hypot(dx, dy) > MOVE_THRESHOLD) {
       g.moved = true;
       window.clearTimeout(longPressTimer.current);
+      // pressing a card and moving drags the card; pressing empty space and moving pans the view
+      if (g.nodeId && !g.addId) {
+        g.dragging = true;
+        cancelHover();
+      }
+    }
+    if (g.dragging && g.nodeId) {
+      const k = viewRef.current.k;
+      setLive({ id: g.nodeId, dx: g.baseDx + dx / k, dy: g.baseDy + dy / k });
+      return;
     }
     if (g.moved) applyView({ ...viewRef.current, x: g.originX + dx, y: g.originY + dy });
   };
@@ -327,6 +357,13 @@ export function Canvas({ layouts, showAll, treeLabels, people, meId, selectedId,
     if (containerRef.current?.hasPointerCapture(e.pointerId)) containerRef.current.releasePointerCapture(e.pointerId);
     if (wasPinch || e.pointerId !== g.pointerId) return;
     g.pointerId = -1;
+    if (g.dragging) {
+      g.dragging = false;
+      const last = liveRef.current;
+      setLive(null);
+      if (e.type === 'pointerup' && last) onMove(last.id, last.dx, last.dy);
+      return;
+    }
     if (e.type !== 'pointerup' || g.moved || g.longPressed) return;
     if (g.addId) onOpenMenu(g.addId, anchorFor(g.addId));
     else if (g.nodeId) onSelect(g.nodeId);
@@ -342,6 +379,14 @@ export function Canvas({ layouts, showAll, treeLabels, people, meId, selectedId,
     } else if (e.key === '+' || e.key === '=') {
       e.preventDefault();
       onOpenMenu(id, anchorFor(id));
+    } else if (e.key.startsWith('Arrow') && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      // keyboard alternative to dragging: arrow keys nudge the focused card (Shift = bigger steps)
+      e.preventDefault();
+      const step = e.shiftKey ? 48 : 12;
+      const p = peopleRef.current[id];
+      const dx = (p?.dx ?? 0) + (e.key === 'ArrowRight' ? step : e.key === 'ArrowLeft' ? -step : 0);
+      const dy = (p?.dy ?? 0) + (e.key === 'ArrowDown' ? step : e.key === 'ArrowUp' ? -step : 0);
+      onMove(id, dx, dy);
     }
   };
 
@@ -350,7 +395,7 @@ export function Canvas({ layouts, showAll, treeLabels, people, meId, selectedId,
   return (
     <div
       ref={containerRef}
-      className="canvas"
+      className={`canvas${live ? ' is-dragging' : ''}`}
       style={style}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
@@ -410,6 +455,7 @@ export function Canvas({ layouts, showAll, treeLabels, people, meId, selectedId,
                     placeholder={person.placeholder}
                     selected={selectedId === n.id}
                     hovering={hoverId === n.id}
+                    dragging={live?.id === n.id}
                   />
                 );
               })}

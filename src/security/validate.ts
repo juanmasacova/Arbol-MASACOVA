@@ -13,6 +13,15 @@ const text = (v: unknown, max: number): string => (typeof v === 'string' ? v.sli
  * Unknown fields are dropped, strings are length-capped, ids must match our own format, and edges that
  * point at missing people are discarded. Throws only if the document is not a tree at all.
  */
+const OFFSET_MAX = 20000;
+const offsetNumber = (v: unknown): number =>
+  typeof v === 'number' && Number.isFinite(v) ? Math.max(-OFFSET_MAX, Math.min(OFFSET_MAX, Math.round(v))) : 0;
+function offsetOf(value: Record<string, unknown>): { dx?: number; dy?: number } {
+  const dx = offsetNumber(value.dx);
+  const dy = offsetNumber(value.dy);
+  return dx || dy ? { dx, dy } : {};
+}
+
 export function parseTree(raw: unknown): Tree {
   if (!isRecord(raw) || raw.version !== 1 || !isRecord(raw.people)) {
     throw new Error('This is not an Árbol tree file.');
@@ -48,6 +57,7 @@ export function parseTree(raw: unknown): Tree {
       photoId: isValidId(value.photoId) ? value.photoId : null,
       placeholder: value.placeholder === true,
       files,
+      ...offsetOf(value),
     };
   }
   if (Object.keys(people).length === 0) throw new Error('No valid people were found.');

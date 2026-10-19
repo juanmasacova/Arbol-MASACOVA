@@ -17,9 +17,10 @@ export interface PersonNodeProps {
   placeholder: boolean;
   selected: boolean;
   hovering: boolean;
+  dragging?: boolean;
 }
 
-function PersonNodeView({ id, x, y, w, h, name, dates, photoId, isMe, placeholder, selected, hovering }: PersonNodeProps) {
+function PersonNodeView({ id, x, y, w, h, name, dates, photoId, isMe, placeholder, selected, hovering, dragging = false }: PersonNodeProps) {
   const photo = useImage(photoId);
   const label = name.trim() || 'Unnamed';
   const size = useMemo(() => sizeNode(name, dates), [name, dates]);
@@ -41,7 +42,7 @@ function PersonNodeView({ id, x, y, w, h, name, dates, photoId, isMe, placeholde
 
   return (
     <g
-      className={`node${selected ? ' is-selected' : ''}${isMe ? ' is-me' : ''}${placeholder ? ' is-placeholder' : ''}`}
+      className={`node${selected ? ' is-selected' : ''}${isMe ? ' is-me' : ''}${placeholder ? ' is-placeholder' : ''}${dragging ? ' is-dragging' : ''}`}
       transform={`translate(${x} ${y})`}
       data-node={id}
       tabIndex={0}

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { defaultTree } from './defaultTree';
 import { historyReducer, initHistory, treeReducer } from './reducer';
 import { planAdd } from '../relations/relations';
+import type { ID, Tree } from './types';
 
 const first = (t: ReturnType<typeof defaultTree>) => Object.keys(t.people)[0]!;
 
@@ -47,14 +48,14 @@ describe('treeReducer', () => {
     expect(treeReducer(tree, { type: 'deletePerson', id: first(tree) })).toBe(tree);
   });
 
-  it('only removes free-form "other" links, never family structure', () => {
+  it('removes any single connection by hand', () => {
     let tree = defaultTree();
     const me = first(tree);
     const parentPlan = planAdd(tree, me, { kind: 'parent' });
     if (parentPlan.status !== 'ok') throw new Error();
     tree = treeReducer(tree, { type: 'applyPlan', plan: parentPlan });
     const edgeId = tree.edges[0]!.id;
-    expect(treeReducer(tree, { type: 'removeEdge', id: edgeId }).edges).toHaveLength(1);
+    expect(treeReducer(tree, { type: 'removeEdge', id: edgeId }).edges).toHaveLength(0);
   });
 
   it('adds an unconnected person for a separate tree', () => {
@@ -93,3 +94,64 @@ describe('historyReducer', () => {
     expect(h.past).toHaveLength(30);
   });
 });
+
+describe('manual connections and dragging', () => {
+  const build = () => {
+    let tree = defaultTree();
+    const me = first(tree);
+    const mom = planAdd(tree, me, { kind: 'parent' });
+    if (mom.status !== 'ok') throw new Error();
+    tree = treeReducer(tree, { type: 'applyPlan', plan: mom });
+    const lone1 = treeReducer(tree, { type: 'addLoose', id: 'p_loneone001' });
+    const lone2 = treeReducer(lone1, { type: 'addLoose', id: 'p_lonetwo001' });
+    return { tree: lone2, me, mom: mom.focusId };
+  };
+
+  it('connects two existing people as parent and child', () => {
+    const { tree, me } = build();
+    const next = treeReducer(tree, { type: 'connect', id: 'e_manual0001', kind: 'child', personId: me, otherId: 'p_loneone001' });
+    expect(next.edges.find((e) => e.id === 'e_manual0001')).toMatchObject({ type: 'parent', from: me, to: 'p_loneone001' });
+  });
+
+  it('refuses a third parent, duplicates, self links and cycles', () => {
+    const { tree, me, mom } = build();
+    const dad = treeReducer(tree, { type: 'connect', id: 'e_dad0000001', kind: 'parent', personId: me, otherId: 'p_loneone001' });
+    expect(parentsOfIds(dad, me)).toHaveLength(2);
+    const third = treeReducer(dad, { type: 'connect', id: 'e_third000001', kind: 'parent', personId: me, otherId: 'p_lonetwo001' });
+    expect(third).toBe(dad);
+    expect(treeReducer(dad, { type: 'connect', id: 'e_dup0000001', kind: 'parent', personId: me, otherId: mom })).toBe(dad);
+    expect(treeReducer(dad, { type: 'connect', id: 'e_self000001', kind: 'partner', personId: me, otherId: me })).toBe(dad);
+    // my mother cannot also be my child
+    expect(treeReducer(dad, { type: 'connect', id: 'e_cycle00001', kind: 'child', personId: me, otherId: mom })).toBe(dad);
+  });
+
+  it('adds a labelled link and removes a family link by hand', () => {
+    const { tree, me, mom } = build();
+    const linked = treeReducer(tree, { type: 'connect', id: 'e_label00001', kind: 'other', personId: me, otherId: 'p_lonetwo001', label: ' Godmother ' });
+    expect(linked.edges.find((e) => e.id === 'e_label00001')?.label).toBe('Godmother');
+    const edge = tree.edges.find((e) => e.from === mom)!;
+    expect(treeReducer(linked, { type: 'removeEdge', id: edge.id }).edges.some((e) => e.id === edge.id)).toBe(false);
+  });
+
+  it('stores a dragged offset and clears it again', () => {
+    const { tree, me } = build();
+    const moved = treeReducer(tree, { type: 'movePerson', id: me, dx: 40.4, dy: -12 });
+    expect(moved.people[me]).toMatchObject({ dx: 40, dy: -12 });
+    expect(treeReducer(moved, { type: 'movePerson', id: me, dx: 0, dy: 0 }).people[me]!.dx).toBeUndefined();
+    expect(treeReducer(moved, { type: 'resetLayout' }).people[me]!.dy).toBeUndefined();
+    expect(treeReducer(tree, { type: 'movePerson', id: me, dx: NaN, dy: 0 })).toBe(tree);
+  });
+
+  it('merges a burst of drag steps into one undo step', () => {
+    const { tree, me } = build();
+    let h = initHistory(tree);
+    h = historyReducer(h, { type: 'movePerson', id: me, dx: 10, dy: 0 }, 1000);
+    h = historyReducer(h, { type: 'movePerson', id: me, dx: 22, dy: 0 }, 1200);
+    expect(h.past).toHaveLength(1);
+    expect(historyReducer(h, { type: 'undo' }).present.people[me]!.dx).toBeUndefined();
+  });
+});
+
+function parentsOfIds(tree: Tree, id: ID): ID[] {
+  return tree.edges.filter((e) => e.type === 'parent' && e.to === id).map((e) => e.from);
+}

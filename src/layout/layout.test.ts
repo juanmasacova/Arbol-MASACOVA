@@ -4,7 +4,7 @@ import { parentsOf } from '../model/graph';
 import type { ID, Tree } from '../model/types';
 import { planAdd, type AddInput } from '../relations/relations';
 import { sizeNode } from './nodeSize';
-import { componentsWithout, findComponents, layoutAll, layoutTree, NODE_W, projectOrdered, ROW_H } from './layout';
+import { componentsWithout, findComponents, layoutAll, layoutTree, NODE_W, projectOrdered, ROW_H, withOffsets } from './layout';
 
 function add(tree: Tree, source: ID, input: AddInput): { tree: Tree; id: ID } {
   const choices: Record<number, ID> = { ...input.choices };
@@ -291,5 +291,38 @@ describe('names of any length', () => {
         expect(b.x - a.x).toBeGreaterThanOrEqual((a.w + b.w) / 2);
       }
     }
+  });
+});
+
+describe('dragging people', () => {
+  it('moves a card and redraws the lines that touch it', () => {
+    const { tree, me } = wideFamily();
+    const layout = layoutAll(tree, me)[0]!;
+    const before = layout.connectors.map((c) => c.d).join('|');
+    const moved = withOffsets(layout, { [me]: { dx: 120, dy: 60 } });
+    expect(moved.nodes[me]!.x).toBe(layout.nodes[me]!.x + 120);
+    expect(moved.nodes[me]!.y).toBe(layout.nodes[me]!.y + 60);
+    expect(moved.connectors.map((c) => c.d).join('|')).not.toBe(before);
+    for (const c of moved.connectors) expect(c.d).not.toMatch(/NaN|undefined/);
+    // nobody else moved
+    const other = Object.keys(tree.people).find((id) => id !== me)!;
+    expect(moved.nodes[other]).toBe(layout.nodes[other]);
+  });
+
+  it('returns the same layout when nothing was dragged', () => {
+    const { tree, me } = wideFamily();
+    const layout = layoutAll(tree, me)[0]!;
+    expect(withOffsets(layout, {})).toBe(layout);
+    expect(withOffsets(layout, { [me]: { dx: 0, dy: 0 } })).toBe(layout);
+  });
+
+  it('keeps a dragged child’s line attached to the heart of its parents', () => {
+    const { tree, me } = wideFamily();
+    const layout = layoutAll(tree, me)[0]!;
+    const moved = withOffsets(layout, { [me]: { dx: -300, dy: 0 } });
+    const fam = moved.connectors.filter((c) => c.kind === 'parent');
+    expect(fam.length).toBeGreaterThan(0);
+    // the family bar must still reach the dragged card's centre
+    expect(fam.some((c) => c.d.includes(`M ${moved.nodes[me]!.x} `))).toBe(true);
   });
 });
