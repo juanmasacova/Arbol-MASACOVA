@@ -1,0 +1,10 @@
+{
+  "name": "Árbol MASACOVA",
+  "short_name": "Árbol",
+  "description": "A private family tree notebook",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#fbf3df",
+  "theme_color": "#2f6b3a",
+  "icons": [{ "src": "favicon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }]
+}
