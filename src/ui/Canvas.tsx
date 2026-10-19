@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent } from 'react';
+import { datesOf } from '../model/graph';
 import type { Person, ID } from '../model/types';
 import type { TreeLayout } from '../layout/layout';
 import { hashString, sketchify } from '../layout/sketch';
@@ -45,13 +46,6 @@ const MAX_K = 2.5;
 
 const clampK = (k: number) => Math.min(MAX_K, Math.max(MIN_K, k));
 const prefersReducedMotion = () => window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
-
-function datesOf(p: Person): string {
-  if (p.born && p.died) return `${p.born} – ${p.died}`;
-  if (p.born) return `b. ${p.born}`;
-  if (p.died) return `d. ${p.died}`;
-  return '';
-}
 
 export function Canvas({ layouts, showAll, treeLabels, people, meId, selectedId, menuOpen, insetRight, insetBottom, centerReq, onSelect, onOpenMenu }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -407,6 +401,8 @@ export function Canvas({ layouts, showAll, treeLabels, people, meId, selectedId,
                     id={n.id}
                     x={n.x}
                     y={n.y}
+                    w={n.w}
+                    h={n.h}
                     name={person.name}
                     dates={datesOf(person)}
                     photoId={person.photoId}

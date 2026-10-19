@@ -130,6 +130,12 @@ export function planAdd(tree: Graph & { counter: number }, sourceId: ID, input: 
     if (step.op === 'partner') {
       const person = makePerson(false);
       link('partner', current, person.id);
+      // children who so far have only this one parent become the couple's children
+      if (partnersOf(draft, current).length === 1) {
+        for (const child of childrenOf(draft, current)) {
+          if (parentsOf(draft, child).length === 1) link('parent', person.id, child);
+        }
+      }
       return { status: 'ok', people: newPeople, edges: newEdges, focusId: person.id, counter };
     }
 
@@ -145,7 +151,13 @@ export function planAdd(tree: Graph & { counter: number }, sourceId: ID, input: 
         const person = makePerson(false);
         link('parent', person.id, current);
         const [existing] = parents;
-        if (existing) link('partner', existing, person.id);
+        if (existing) {
+          link('partner', existing, person.id);
+          // full siblings (children of the same single parent) belong to the new parent too
+          for (const sibling of childrenOf(draft, existing)) {
+            if (sibling !== current && parentsOf(draft, sibling).length === 1) link('parent', person.id, sibling);
+          }
+        }
         return { status: 'ok', people: newPeople, edges: newEdges, focusId: person.id, counter };
       }
       if (parents.length === 0) {

@@ -1,5 +1,5 @@
 import { memo, useMemo } from 'react';
-import { NODE_H, NODE_W } from '../layout/layout';
+import { sizeNode } from '../layout/nodeSize';
 import { circlePath, hashString, roundedRectPath, sketchify } from '../layout/sketch';
 import type { ID } from '../model/types';
 import { useImage } from './useImage';
@@ -8,6 +8,8 @@ export interface PersonNodeProps {
   id: ID;
   x: number;
   y: number;
+  w: number;
+  h: number;
   name: string;
   dates: string;
   photoId: ID | null;
@@ -17,13 +19,13 @@ export interface PersonNodeProps {
   hovering: boolean;
 }
 
-const truncate = (text: string, max: number) => (text.length > max ? `${text.slice(0, max - 1)}…` : text);
-
-function PersonNodeView({ id, x, y, name, dates, photoId, isMe, placeholder, selected, hovering }: PersonNodeProps) {
+function PersonNodeView({ id, x, y, w, h, name, dates, photoId, isMe, placeholder, selected, hovering }: PersonNodeProps) {
   const photo = useImage(photoId);
   const label = name.trim() || 'Unnamed';
-  const w = NODE_W;
-  const h = NODE_H;
+  const size = useMemo(() => sizeNode(name, dates), [name, dates]);
+  const { lines, fontSize, lineHeight, dateFontSize } = size;
+  // the avatar and text hang from the top of the card, so a taller card grows downwards
+  const dy = 46 - h / 2;
 
   // hand-drawn outlines, stable per person
   const shapes = useMemo(() => {
@@ -50,27 +52,31 @@ function PersonNodeView({ id, x, y, name, dates, photoId, isMe, placeholder, sel
       <rect x={-w / 2 - 6} y={-h / 2 - 6} width={w + 12} height={h + 12} fill="transparent" />
       <path className="node-card-echo" d={shapes.cardEcho} />
       <path className="node-card" d={shapes.card} />
-      <path className="node-avatar" d={shapes.avatar} />
-      {!photo && (
-        <>
-          <path className="node-silhouette" d={shapes.head} />
-          <path className="node-silhouette node-line" d={shapes.shoulders} />
-        </>
-      )}
-      {photo && (
-        <>
-          <clipPath id={`clip-${id}`}>
-            <circle cx={0} cy={-19} r={21} />
-          </clipPath>
-          <image href={photo} x={-21} y={-40} width={42} height={42} preserveAspectRatio="xMidYMid slice" clipPath={`url(#clip-${id})`} />
-        </>
-      )}
-      <text className="node-name" x={0} y={27} textAnchor="middle">
-        {truncate(label, 17)}
-      </text>
+      <g transform={`translate(0 ${dy})`}>
+        <path className="node-avatar" d={shapes.avatar} />
+        {!photo && (
+          <>
+            <path className="node-silhouette" d={shapes.head} />
+            <path className="node-silhouette node-line" d={shapes.shoulders} />
+          </>
+        )}
+        {photo && (
+          <>
+            <clipPath id={`clip-${id}`}>
+              <circle cx={0} cy={-19} r={21} />
+            </clipPath>
+            <image href={photo} x={-21} y={-40} width={42} height={42} preserveAspectRatio="xMidYMid slice" clipPath={`url(#clip-${id})`} />
+          </>
+        )}
+      </g>
+      {lines.map((line, i) => (
+        <text key={i} className="node-name" style={{ fontSize }} x={0} y={27 + dy + i * lineHeight} textAnchor="middle">
+          {line}
+        </text>
+      ))}
       {dates && (
-        <text className="node-dates" x={0} y={42} textAnchor="middle">
-          {truncate(dates, 22)}
+        <text className="node-dates" style={{ fontSize: dateFontSize }} x={0} y={42 + dy + (lines.length - 1) * lineHeight} textAnchor="middle">
+          {dates}
         </text>
       )}
       {isMe && (

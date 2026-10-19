@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { layoutAll } from '../layout/layout';
-import { displayName } from '../model/graph';
+import { sizeNode, resetTextMeasurements } from '../layout/nodeSize';
+import { datesOf, displayName } from '../model/graph';
 import { newId } from '../model/ids';
 import type { ID } from '../model/types';
 import { planAdd, type AddInput, type PlanResult } from '../relations/relations';
@@ -42,13 +43,44 @@ export default function App() {
 
   const requestCenter = useCallback((target: ID | 'fit') => setCenterReq((r) => ({ n: r.n + 1, target })), []);
 
-  // layout depends only on who exists and how they connect, not on names or notes
+  // names decide how wide each card must be; the web font must be loaded to measure them properly
+  const [fontTick, setFontTick] = useState(0);
+  useEffect(() => {
+    const fonts = typeof document !== 'undefined' ? document.fonts : undefined;
+    if (!fonts) return;
+    let alive = true;
+    Promise.all([fonts.load('18px "Patrick Hand"'), fonts.load('13px "Patrick Hand"')])
+      .catch(() => undefined)
+      .then(() => fonts.ready)
+      .then(() => {
+        if (!alive) return;
+        resetTextMeasurements();
+        setFontTick((n) => n + 1);
+      });
+    return () => {
+      alive = false;
+    };
+  }, []);
+  const sizes = useMemo(() => {
+    const map: Record<ID, { w: number; h: number }> = {};
+    for (const p of Object.values(tree.people)) {
+      const { w, h } = sizeNode(p.name, datesOf(p));
+      map[p.id] = { w, h };
+    }
+    return map;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tree.people, fontTick]);
+
+  // layout depends on who exists, how they connect and how big their cards are, not on notes
   const structureKey = useMemo(
-    () => `${Object.keys(tree.people).join(',')}|${tree.edges.map((e) => `${e.type}${e.from}${e.to}`).join(',')}|${tree.meId ?? ''}`,
-    [tree.people, tree.edges, tree.meId],
+    () =>
+      `${Object.keys(tree.people)
+        .map((id) => `${id}:${sizes[id]?.w}x${sizes[id]?.h}`)
+        .join(',')}|${tree.edges.map((e) => `${e.type}${e.from}${e.to}`).join(',')}|${tree.meId ?? ''}`,
+    [tree.people, tree.edges, tree.meId, sizes],
   );
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  const layouts = useMemo(() => layoutAll({ people: tree.people, edges: tree.edges }, tree.meId), [structureKey]);
+  const layouts = useMemo(() => layoutAll({ people: tree.people, edges: tree.edges }, tree.meId, sizes), [structureKey]);
 
   const treeNames = useMemo(
     () =>

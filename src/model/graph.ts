@@ -42,3 +42,11 @@ export const blankPerson = (id: ID, name: string, placeholder = false): Person =
   placeholder,
   files: [],
 });
+
+/** The short date line shown on a person's card. */
+export function datesOf(p: Person): string {
+  if (p.born && p.died) return `${p.born} – ${p.died}`;
+  if (p.born) return `b. ${p.born}`;
+  if (p.died) return `d. ${p.died}`;
+  return '';
+}

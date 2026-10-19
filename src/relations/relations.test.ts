@@ -221,3 +221,39 @@ describe('planAdd: descendants and other', () => {
     }
   });
 });
+
+describe('planAdd: later arrivals join existing children', () => {
+  it('links a second parent to siblings who only had the first parent', () => {
+    let tree = defaultTree();
+    const me = rootOf(tree);
+    const mom = add(tree, me, { kind: 'parent' });
+    tree = mom.tree;
+    const sister = add(tree, me, { kind: 'sibling' });
+    tree = sister.tree;
+    const dad = add(tree, me, { kind: 'parent' });
+    tree = dad.tree;
+    expect(parentsOf(tree, sister.focusId).sort()).toEqual([mom.focusId, dad.focusId].sort());
+    expect(parentsOf(tree, me).sort()).toEqual([mom.focusId, dad.focusId].sort());
+  });
+
+  it('makes a new partner the second parent of existing single-parent children', () => {
+    let tree = defaultTree();
+    const me = rootOf(tree);
+    const kid = add(tree, me, { kind: 'child' });
+    tree = kid.tree;
+    const partner = add(tree, me, { kind: 'partner' });
+    tree = partner.tree;
+    expect(parentsOf(tree, kid.focusId).sort()).toEqual([me, partner.focusId].sort());
+  });
+
+  it('does not touch children when the person already had a partner', () => {
+    let tree = defaultTree();
+    const me = rootOf(tree);
+    tree = add(tree, me, { kind: 'partner' }).tree;
+    const kid = add(tree, me, { kind: 'child' });
+    tree = kid.tree;
+    const second = add(tree, me, { kind: 'partner' });
+    tree = second.tree;
+    expect(parentsOf(tree, kid.focusId)).not.toContain(second.focusId);
+  });
+});
